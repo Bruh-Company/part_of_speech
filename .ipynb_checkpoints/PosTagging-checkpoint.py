@@ -1,8 +1,11 @@
 import numpy as np
+import sys
 
 class PosTagging:
     def __init__(self, feeder):
-        # Feeder itu Array of Kalimat
+        '''
+        feeder as training data
+        '''
         
         #constant
         self.__lambda = 0.7
@@ -13,21 +16,32 @@ class PosTagging:
         self.context = {}
         self.uniqueWords = []
         self.countWords = 0
+        self.uniqueTags = []
 
+    def get_lambda(self):
+        return self.__lambda
+       
+    def set_lambda(self, value):
+         self.__lambda = value
+        
     def insertTransition(self, previousTag, tag):
         if previousTag not in self.transition:
             self.transition[previousTag] = {}
         self.transition[previousTag][tag] = self.transition[previousTag].get(tag, 0) + 1
-
+        
     def insertEmit(self, tag, word):
         if tag not in self.emit:
             self.emit[tag] = {}
         self.emit[tag][word] = self.emit[tag].get(word, 0) + 1
-
+        
     def insertContext(self, tag):
         self.context[tag] = self.context.get(tag, 0) + 1
 
+        
     def evaluatePOS(self, sentence):
+        '''
+        evaluate statistical data from a sentence
+        '''
         previous = "<s>"
         self.insertContext(previous)
 
@@ -47,77 +61,118 @@ class PosTagging:
             
         self.insertTransition(previous, '</s>')
 
+        
     def evaluateFeed(self):
-        for sentence in self.feeder:
+        '''
+        evaluate statistical data (words and tags)
+        from every sentence in feeder
+        '''
+        lst = -1
+        for idx,sentence in enumerate(self.feeder):
             self.evaluatePOS(sentence)
+            
+            prc = (idx + 1) * 50 // len(self.feeder)
+            if prc > lst :
+                sys.stdout.write('[%s/%s]\t|%s%s|\r' % (idx+1, len(self.feeder), prc * "█", (50 - prc) * "."))
+                sys.stdout.flush()
+                lst = prc
+            
+        sys.stdout.write('\nfinished...')
+        
         self.uniqueWords = list(set(self.uniqueWords))
         self.countWords = len(self.uniqueWords)
-        # print(self.uniqueWords)
-        # print(self.countWords)
+        
+        self.uniqueTags = [tags for tags,_ in self.context.items()]
+        
         return self.emit, self.transition, self.context
 
-    def smoothEmissionProbability(self, word, tag):
-        # print('SMOOTH:',(1-__lambda) * (1/self.countWords))
-        return (self.__lambda*self.emissionProbability(word, tag)) + ((1-self.__lambda) * (1/self.countWords))
+    
+    def predict(self, sentence):
+        '''
+        computing best chain of tag from a sentence based on computed probabilistic
+        using dynamic programming method
+        '''
+        
+        '''
+        forward step, compute best desicion for each tags
+        '''
+        # probabilistic functon
+        emissionProbability =\
+            lambda word, tag :\
+                self.emit[tag].get(word,0) / self.context[tag]
+        transitionProbability =\
+            lambda previousTag, tag :\
+                self.transition[tag].get(previousTag, 0) / self.context[tag]
+        # smoothed
+        Pe = lambda word, tag : self.__lambda * emissionProbability(word, tag) + (1 - self.__lambda) * (1 / self.countWords)
+        Pt = lambda prevTag, tag : transitionProbability(prevTag, tag)
+        
+        # preparation
+        [words, labels] = np.array(sentence).T
+        N = len(words)
+        
+        score = {}
+        best_trans = [{} for _ in range(N + 2)]
+        
+        for tag in self.uniqueTags:
+            score[tag] = float('inf')
+        score['<s>'] = 0
+        
+        # relation checker
+        exists = lambda prv, nxt :\
+            prv in self.transition and nxt in self.transition[prvTag]
+        
+        # check for every sentence edge
+        for i in range(N):
+            # initialize every best score from a tag with infinite
+            nscore = {}
+            for tag in self.uniqueTags:
+                nscore[tag] = float('inf')
+            
+            # iterate over every relation on the sentece
+            for prvTag in self.uniqueTags:
+                for nxtTag in self.uniqueTags:
+                    '''
+                    brute force, checking every possible relation
+                    (there's exists an optimization technique but we'll try to implement it later)
+                    '''
+                    if exists(prvTag, nxtTag):
+                        '''
+                        score[nxtTag] = score[prvTag] - log(Pt(prvTag | nxtTag)) - log(Pe(nxtTag | word))
+                        '''
+                        prob = np.log(Pt(nxtTag, prvTag)) + np.log(Pe(words[i], nxtTag))
+                        value = score.get(prvTag) - prob
 
-    def emissionProbability(self, word, tag):
-        if word not in self.emit[tag]:
-            # print("EMIT IS 0")
-            return 0
-        # print('EMIT:',self.emit[tag].get(word),self.emit[tag].get(word) / self.context[tag])
-        return self.emit[tag].get(word,0) / self.context[tag]
-
-    def transitionProbability(self, previousTag, tag):
-        # print('TRANSITIONS:', self.transition[previousTag].get(tag,0),self.transition[previousTag].get(tag,0) / self.context[tag])
-        return self.transition[tag].get(previousTag,0) / self.context[tag]
-
-    def forwardStep(self, sentence):
-        # sentence = np.insert(sentence, 0, ['<s>','<s>'], axis=0)
-        # sentence = np.insert(sentence, sentence.shape[0], ['</s>','</s>'], axis=0)
-        
-        words = [x[0] for x in sentence]
-        labels = [x[1] for x in sentence]
-        
-        best_score = [{} for i in range(len(words)+2)]
-        best_edge = [{} for i in range(len(words)+2)]
-        
-        best_score[0]['<s>'] = 0
-        best_edge[0]['<s>'] = None
-        
-        for i in range(len(words)):
-            for prevTag, val1 in self.context.items():
-                for nextTag, val2 in self.context.items():
-                    
-                    if prevTag in best_score[i] and prevTag in self.transition and nextTag in self.transition[prevTag]:
-                        
-                        prob = (-np.log(self.transitionProbability(nextTag, prevTag))) + (-np.log(self.smoothEmissionProbability(words[i], nextTag)))
-                        score = best_score[i].get(prevTag) + prob
-
-                        if nextTag not in best_score[i+1] or best_score[i+1][nextTag] > score:
-                            best_score[i+1][nextTag] = score
-                            best_edge[i+1][nextTag] = prevTag
-        
+                        if nscore[nxtTag] > value:
+                            nscore[nxtTag] = value
+                            best_trans[i + 1][nxtTag] = prvTag
+            score = nscore
+            
         listScore = {}
-        for prevTag in best_score[-2]:
-            transProb = self.transition[prevTag].get('</s>',0) / self.feeder.shape[0]
-            value = best_score[-2][prevTag] + (-np.log(transProb))
-            listScore[best_edge[-2][prevTag]] = value
+        
+        for prvTag, val in score.items():
+            if val >= float('inf') :
+                continue
+                
+            transProb = self.transition[prvTag].get('</s>', 0) / self.feeder.shape[0]
+            
+            if transProb == 0 :
+                listScore[best_trans[-2][prvTag]] = float('inf')
+            else :
+                listScore[best_trans[-2][prvTag]] = score[prvTag] + (-np.log(transProb))
 
-        best_key = min(listScore, key=listScore.get)
-        best_score[-1]['</s>'] = listScore[best_key]
-        best_edge[-1]['</s>'] = best_key
-        return best_score, best_edge
-
-    def backwardStep(self, best_edge, sentence):
+        best_trans[-1]['</s>'] = min(listScore, key=listScore.get)
+        
+        '''
+        backward step
+        '''
         tags = ["</s>"]
-        tag = next_edge = best_edge[-1]['</s>']
-        pos = len(sentence) + 1
-        while pos != 0 and tag != '<s>':
-            tags.append(tag)
-            tag = best_edge[int(pos) - 1][tag]
+        pos = N = len(sentence)
+        
+        while pos >= 0:
+            tags.append(best_trans[pos + 1][tags[N - pos]])
             pos -= 1
-        words = (x[0] for x in sentence)
-
-        return tags[::-1]
+        tags = tags[::-1]
+        return tags[1:-1]
         
 
