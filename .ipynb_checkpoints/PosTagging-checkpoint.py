@@ -1,7 +1,11 @@
 import numpy as np
 import sys
+from tqdm.notebook import tqdm
+import psutil
+import ray
 
 class PosTagging:
+    
     def __init__(self, feeder):
         '''
         feeder as training data
@@ -10,79 +14,78 @@ class PosTagging:
         #constant
         self.__lambda = 0.7
         
-        self.feeder = feeder 
+        self.__feeder = feeder 
         self.emit = {}
         self.transition = {}
         self.context = {}
-        self.uniqueWords = []
-        self.countWords = 0
-        self.uniqueTags = []
+        self.unique_words = []
+        self.count_words = 0
+        self.unique_tags = []
 
-    def get_lambda(self):
-        return self.__lambda
+#     def get_lambda(self):
+#         return self.__lambda
        
     def set_lambda(self, value):
          self.__lambda = value
         
-    def insertTransition(self, previousTag, tag):
+        
+    def __ins_trans(self, previousTag, tag):
         if previousTag not in self.transition:
             self.transition[previousTag] = {}
         self.transition[previousTag][tag] = self.transition[previousTag].get(tag, 0) + 1
         
-    def insertEmit(self, tag, word):
+        
+    def __ins_emit(self, tag, word):
         if tag not in self.emit:
             self.emit[tag] = {}
         self.emit[tag][word] = self.emit[tag].get(word, 0) + 1
         
-    def insertContext(self, tag):
+        
+    def __ins_ctx(self, tag):
         self.context[tag] = self.context.get(tag, 0) + 1
 
         
-    def evaluatePOS(self, sentence):
+    def __evaluate_pos(self, sentence):
         '''
         evaluate statistical data from a sentence
         '''
         previous = "<s>"
-        self.insertContext(previous)
+        self.__ins_ctx(previous)
 
         for wordtag in sentence:
             word, tag = wordtag
-            self.uniqueWords.append(word)
-            #Transition
-            self.insertTransition(previous,tag)
-
-            # Context
-            self.insertContext(tag)
-
-            #Emit
-            self.insertEmit(tag,word)
+            self.unique_words.append(word)
+            
+            self.__ins_trans(previous,tag)
+            self.__ins_ctx(tag)
+            self.__ins_emit(tag,word)
 
             previous = tag
             
-        self.insertTransition(previous, '</s>')
+        self.__ins_trans(previous, '</s>')
 
         
-    def evaluateFeed(self):
+    def train(self):
         '''
         evaluate statistical data (words and tags)
         from every sentence in feeder
         '''
         lst = -1
-        for idx,sentence in enumerate(self.feeder):
-            self.evaluatePOS(sentence)
+        for idx,sentence in enumerate(self.__feeder):
+            self.__evaluate_pos(sentence)
             
-            prc = (idx + 1) * 50 // len(self.feeder)
+            prc = (idx + 1) * 50 // len(self.__feeder)
             if prc > lst :
-                sys.stdout.write('[%s/%s]\t|%s%s|\r' % (idx+1, len(self.feeder), prc * "█", (50 - prc) * "."))
+                sys.stdout.write('[%s/%s]\t|%s%s|\r' % (idx+1, len(self.__feeder), prc * "█", (50 - prc) * "."))
                 sys.stdout.flush()
                 lst = prc
             
         sys.stdout.write('\nfinished...')
         
-        self.uniqueWords = list(set(self.uniqueWords))
-        self.countWords = len(self.uniqueWords)
+        self.unique_words = list(set(self.unique_words))
+        self.count_words = len(self.unique_words)
         
-        self.uniqueTags = [tags for tags,_ in self.context.items()]
+        self.unique_tags = [tags for tags,_ in self.context.items()]
         
         return self.emit, self.transition, self.context
 
@@ -104,7 +107,7 @@ class PosTagging:
             lambda previousTag, tag :\
                 self.transition[tag].get(previousTag, 0) / self.context[tag]
         # smoothed
-        Pe = lambda word, tag : self.__lambda * emissionProbability(word, tag) + (1 - self.__lambda) * (1 / self.countWords)
+        Pe = lambda word, tag : self.__lambda * emissionProbability(word, tag) + (1 - self.__lambda) * (1 / self.count_words)
         Pt = lambda prevTag, tag : transitionProbability(prevTag, tag)
         
         # preparation
@@ -114,7 +117,7 @@ class PosTagging:
         score = {}
         best_trans = [{} for _ in range(N + 2)]
         
-        for tag in self.uniqueTags:
+        for tag in self.unique_tags:
             score[tag] = float('inf')
         score['<s>'] = 0
         
@@ -126,12 +129,12 @@ class PosTagging:
         for i in range(N):
             # initialize every best score from a tag with infinite
             nscore = {}
-            for tag in self.uniqueTags:
+            for tag in self.unique_tags:
                 nscore[tag] = float('inf')
             
             # iterate over every relation on the sentece
-            for prvTag in self.uniqueTags:
-                for nxtTag in self.uniqueTags:
+            for prvTag in self.unique_tags:
+                for nxtTag in self.unique_tags:
                     '''
                     brute force, checking every possible relation
                     (there's exists an optimization technique but we'll try to implement it later)
@@ -154,7 +157,7 @@ class PosTagging:
             if val >= float('inf') :
                 continue
                 
-            transProb = self.transition[prvTag].get('</s>', 0) / self.feeder.shape[0]
+            transProb = self.transition[prvTag].get('</s>', 0) / self.__feeder.shape[0]
             
             if transProb == 0 :
                 listScore[best_trans[-2][prvTag]] = float('inf')
@@ -174,5 +177,42 @@ class PosTagging:
             pos -= 1
         tags = tags[::-1]
         return tags[1:-1]
+    
+    def evaluate(self, data, label):
+        tags = self.predict(data)
+        return (tags == label).sum()
         
+    def validate_0(self, validation_data, step_up):
+        ray.init(num_cpus=psutil.cpu_count(logical=False), ignore_reinit_error=True)
+        '''
+        caranya chen
+        '''
+        def get_tag_accuracy(self, data, labels):
+            cnt = np.array([data[i].shape[0] for i in range(len(data))]).sum()
+            right = 0
+            for i in range(len(data)):
+                right += self.evaluate(data[0], labels[0])
+            
+            print(right/cnt)
+            return right / cnt
+    
+        self.__lambda = 0.0
+        lambda_values = []
+        labels = []
+        
+        for i in range(len(validation_data)):
+            [words, label] = validation_data[i].T
+            labels.append(label)
+            
+        for i in tqdm(range(int(np.reciprocal(step_up)))):
+            lambda_values.append((self.__lambda, get_tag_accuracy(self, validation_data, labels)))
+            self.__lambda += step_up
+        
+        ray.shutdown()
+        return lambda_values
 
+    def validate_1(self, validation_data):
+        '''
+        ternary search
+        '''
+        pass
