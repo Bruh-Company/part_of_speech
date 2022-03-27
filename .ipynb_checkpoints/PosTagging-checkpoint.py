@@ -178,40 +178,42 @@ class PosTagging:
         tags = tags[::-1]
         return tags[1:-1]
     
-    def evaluate(self, data, label):
-        tags = self.predict(data)
+    def evaluate(self, datum, label):
+        tags = self.predict(datum)
         return (tags == label).sum()
         
-    def validate_0(self, validation_data, step_up):
+    def get_tag_accuracy(self, data, labels, hide=True):
+        cnt = np.array([data[i].shape[0] for i in range(len(data))]).sum()
+        right = 0
+        #Iterasi untuk per kalimat
+        # (tqdm(iterator) if verbose else iterator):
+        print("BRUH")
+        for i in tqdm(range(len(data)), disable=hide):
+            right += self.evaluate(data[i], labels[i])
+        return right / cnt
+    
+    def validate(self, validation_data, step_up):
         ray.init(num_cpus=psutil.cpu_count(logical=False), ignore_reinit_error=True)
         '''
         caranya chen
         '''
-        def get_tag_accuracy(self, data, labels):
-            cnt = np.array([data[i].shape[0] for i in range(len(data))]).sum()
-            right = 0
-            for i in range(len(data)):
-                right += self.evaluate(data[0], labels[0])
-            
-            print(right/cnt)
-            return right / cnt
-    
         self.__lambda = 0.0
         lambda_values = []
-        labels = []
-        
-        for i in range(len(validation_data)):
-            [words, label] = validation_data[i].T
-            labels.append(label)
+        # Gets all the labes for each sentences (by transposing)
+        labels = [data.T[1] for data in validation_data]
             
         for i in tqdm(range(int(np.reciprocal(step_up)))):
-            lambda_values.append((self.__lambda, get_tag_accuracy(self, validation_data, labels)))
+            lambda_values.append((self.__lambda, self.get_tag_accuracy(validation_data, labels)))
             self.__lambda += step_up
         
         ray.shutdown()
         return lambda_values
+    def test(self, testing_data, __lambda):
+        labels = [data.T[1] for data in testing_data]
+        self.__lambda = __lambda
+        return self.get_tag_accuracy(testing_data, labels, hide=False)
 
-    def validate_1(self, validation_data):
+    def validate_with_ternary_search(self, validation_data):
         '''
         ternary search
         '''
